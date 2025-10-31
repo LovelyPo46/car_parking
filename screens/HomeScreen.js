@@ -1,4 +1,4 @@
-// screens/HomeScreen.js (ฉบับแก้ไข: Final Solution - รวม Text)
+// screens/HomeScreen.js (ฉบับแก้ไข: แสดงสถานะการจอดจริงด้วยสีแดง)
 
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Alert } from 'react-native';
@@ -9,41 +9,64 @@ import { Ionicons } from '@expo/vector-icons';
 
 const BookingCard = ({ spot, onCancel, navigation, userBooking }) => {
     
+    // สถานะการจองปัจจุบันของ User
     const isReservedByCurrentUser = userBooking && userBooking.spotId === spot.spotName;
-    const isCurrentlyOccupied = spot.currentBooking || isReservedByCurrentUser;
+    // สถานะการจอดรถจริง (อ่านจาก field ที่ ESP32 อัปเดต)
+    const isPhysicallyOccupied = spot.isOccupiedByCar === true; // ******* จุดสำคัญ: อ่านสถานะจริงจาก ESP32 *******
+
+    // สถานะการจองปัจจุบันของช่องจอด (โดยใครก็ได้)
+    const isReservedNow = !!spot.currentBooking; 
 
     let status, color, detailComponent;
 
-    // --- 1. จองแล้ว ณ เวลานี้ (สีส้ม) ---
-    if (isCurrentlyOccupied) {
+    // --- 1. ตรวจสอบสถานะการจอดจริง (สีแดง/ส้ม: ไม่ว่าง) ---
+    if (isPhysicallyOccupied) {
         status = 'ไม่ว่าง';
-        color = '#DD6B20'; // ส้ม
         
-        const bookingToShow = spot.currentBooking || userBooking; 
-        
-        if (bookingToShow) {
+        if (isReservedByCurrentUser) {
+            // กรณี 1: รถของผู้จองจอดอยู่จริง -> ใช้สีแดงเข้ม (#E53E3E) ตามคำขอ
+            color = '#E53E3E'; // สีแดงเข้ม
+            const bookingToShow = userBooking;
+            const startTime = bookingToShow.startTime.toDate().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+            const endTime = bookingToShow.endTime.toDate().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+
+            detailComponent = (
+                <View>
+                    <Text style={styles.cardDetailLabel}>รายละเอียด:</Text>
+                    <Text style={[styles.cardDetailValue, { color: color, fontWeight: '700' }]}>
+                        การจองของคุณ: {startTime} - {endTime} น. (รถจอดแล้ว)
+                    </Text>
+                </View>
+            );
+        } else if (isReservedNow) {
+            // กรณี 2: มีคนอื่นจองและจอดอยู่ (แสดงสถานะไม่ว่างตามเดิม)
+            color = '#DD6B20'; // ส้ม
+            const bookingToShow = spot.currentBooking; 
             const startTime = bookingToShow.startTime.toDate().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
             const endTime = bookingToShow.endTime.toDate().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
             
             detailComponent = (
                 <View>
                     <Text style={styles.cardDetailLabel}>รายละเอียด:</Text>
-                    <Text style={[styles.cardDetailValue, styles.currentBookingText]}>
-                        การจองของฉัน: {startTime} - {endTime} น.
-                    </Text>
+                    <Text style={[styles.cardDetailValue, { color: color, fontWeight: '700' }]}>
+                       มีรถจอดอยู่ (จองโดยผู้อื่น: {startTime} - {endTime} น.)
+                   </Text>
                 </View>
             );
         } else {
+            // กรณี 3: มีรถจอดอยู่ แต่ไม่มีการจองที่ใช้งานอยู่
+            color = '#DD6B20'; // ส้ม
             detailComponent = (
-                <View>
-                    <Text style={styles.cardDetailLabel}>รายละเอียด:</Text>
-                    <Text style={styles.cardDetailValue}>ไม่ว่าง (ไม่ระบุเวลา)</Text>
-                </View>
-            );
+                 <View>
+                     <Text style={styles.cardDetailLabel}>รายละเอียด:</Text>
+                     <Text style={styles.cardDetailValue}>ไม่ว่าง (มีรถจอดอยู่โดยไม่มีการจอง)</Text>
+                 </View>
+             );
         }
     } 
-    // VVV --- 2. ว่าง แต่มีคิวจองในอนาคต (สีเขียว) หรือ ว่างตลอดเวลา --- VVV
+    // VVV --- 2. ว่างจริงตามเซ็นเซอร์ (สีเขียว: ว่าง) --- VVV
     else {
+        // เมื่อไม่มีรถจอดจริง
         const now = new Date();
         const futureBookingsToday = spot.allActiveBookings.filter(b => 
             b.startTime.toDate().toDateString() === now.toDateString() && b.endTime.toDate() > now
@@ -52,13 +75,31 @@ const BookingCard = ({ spot, onCancel, navigation, userBooking }) => {
         status = 'ว่าง';
         color = '#38A169'; // เขียว
 
-        if (futureBookingsToday.length > 0) {
-            // VVV--- แก้ไข: รวมข้อความทั้งหมดใน Text เดียวกัน ---VVV
+        if (isReservedByCurrentUser) {
+             // กรณีพิเศษ: ผู้ใช้จองไว้ แต่ IR บอกว่า "ว่าง" -> อาจกำลังขับเข้ามา
+             color = '#3182ce'; // น้ำเงิน/ฟ้า (แสดงว่าจองแล้ว แต่ยังไม่จอด)
+             status = 'จองแล้ว';
+
+             const bookingToShow = userBooking;
+             const startTime = bookingToShow.startTime.toDate().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+             const endTime = bookingToShow.endTime.toDate().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+            
+            detailComponent = (
+                <View>
+                    <Text style={styles.cardDetailLabel}>รายละเอียด:</Text>
+                    <Text style={[styles.cardDetailValue, { color: color, fontWeight: '700' }]}>
+                        การจองของคุณ: {startTime} - {endTime} น. (รอรถเข้าจอด)
+                    </Text>
+                </View>
+            );
+
+        } else if (futureBookingsToday.length > 0) {
+            // มีคนอื่นจองในอนาคต แต่ตอนนี้ว่างจริง
             const bookingSummary = futureBookingsToday.map(booking => {
                 const startTime = booking.startTime.toDate().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
                 const endTime = booking.endTime.toDate().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
                 return `${startTime} - ${endTime} น.`;
-            }).join('\n'); // ใช้ \n เพื่อขึ้นบรรทัดใหม่
+            }).join('\n'); 
             
             detailComponent = (
                 <View>
@@ -68,7 +109,6 @@ const BookingCard = ({ spot, onCancel, navigation, userBooking }) => {
                     </Text>
                 </View>
             );
-            // ^^^ --------------------------------------------- ^^^
         } else {
             // ว่างตลอดเวลา
             detailComponent = (
@@ -94,11 +134,13 @@ const BookingCard = ({ spot, onCancel, navigation, userBooking }) => {
                 {detailComponent}
             </View>
             <View style={styles.buttonRow}>
-                {status === 'ว่าง' && !userBooking && (
+                {/* ปุ่มจองจะแสดงเมื่อว่างจริง (isPhysicallyOccupied: false) และผู้ใช้ไม่มีการจองอื่น */}
+                {!isPhysicallyOccupied && status === 'ว่าง' && !userBooking && (
                     <TouchableOpacity style={[styles.actionButton, styles.reserveButton]} onPress={() => navigation.navigate('Booking', { spotId: spot.spotName })}>
                         <Text style={styles.actionButtonText}>กดจอง</Text>
                     </TouchableOpacity>
                 )}
+                {/* ปุ่มยกเลิกจองจะแสดงเมื่อผู้ใช้จองช่องจอดนั้นไว้ */}
                 {isReservedByCurrentUser && (
                     <TouchableOpacity style={[styles.actionButton, styles.cancelButton]} onPress={() => onCancel(userBooking.id, userBooking.spotId)}>
                         <Text style={styles.actionButtonText}>ยกเลิกจอง</Text>
@@ -113,26 +155,35 @@ export default function HomeScreen({ navigation }) {
     const [parkingSpots, setParkingSpots] = useState([]);
     const [loading, setLoading] = useState(true);
     const [userBooking, setUserBooking] = useState(null);
-    const userEmail = auth.currentUser?.email || 'ผู้ใช้';
 
     useEffect(() => {
         const now = new Date();
         
+        // 1. Listen to parking spots data (where ESP32 updates physical status)
         const spotsUnsubscribe = onSnapshot(collection(db, 'parkingSpots'), (spotsSnapshot) => {
-            const allSpots = spotsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            const allSpots = spotsSnapshot.docs.map(doc => ({ 
+                id: doc.id, 
+                ...doc.data(),
+                // ใช้ Document ID เป็น spotName หากไม่มีฟิลด์ spotName
+                spotName: doc.data().spotName || doc.id 
+            }));
 
+            // 2. Query active bookings
             const bookingsQuery = query(
                 collection(db, 'bookings'), 
                 where('endTime', '>=', now),
                 orderBy('startTime', 'asc')
             );
 
+            // 3. Listen to active bookings
             const bookingsUnsubscribe = onSnapshot(bookingsQuery, (bookingsSnapshot) => {
                 const activeBookings = bookingsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                 
+                // 4. Combine data
                 const combinedData = allSpots.map(spot => {
                     const bookingsForSpot = activeBookings.filter(b => b.spotId === spot.spotName);
                     
+                    // หาว่ามีใครจองช่องจอดนี้อยู่ตอนนี้หรือไม่
                     const currentBooking = bookingsForSpot.find(b => 
                         b.startTime.toDate() <= now && b.endTime.toDate() > now
                     );
@@ -151,6 +202,7 @@ export default function HomeScreen({ navigation }) {
             return () => bookingsUnsubscribe();
         });
 
+        // 5. Listen to current user's active booking
         let userUnsubscribe = () => {};
         if (auth.currentUser) {
             const userQuery = query(collection(db, 'bookings'), where('userId', '==', auth.currentUser.uid), where('endTime', '>=', now));
