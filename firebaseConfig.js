@@ -10,7 +10,7 @@ import { getDatabase } from 'firebase/database'; // <--- สำหรับ Park
 
 // Use your real Firebase config
 export const firebaseConfig = {
-  apiKey: 'AIzaSyDw7S2hVij4xfbNFzDoC4VscxfsZs5L-7Y',
+  apiKey: "AIzaSyDw7S2hVij4xfbNFzDoC4VscxfsZs5L-7Y",
   authDomain: 'car-parking-4fa9a.firebaseapp.com',
   projectId: 'car-parking-4fa9a',
   storageBucket: 'car-parking-4fa9a.appspot.com',
@@ -30,3 +30,4 @@ export const storage = getStorage(app);
 
 // <--- *** GEMINI FIX: 3. Export Realtime Database (rtdb) *** --->
 export const rtdb = getDatabase(app); // นี่คือ Realtime Database (สำหรับสถานะช่องจอด)
+

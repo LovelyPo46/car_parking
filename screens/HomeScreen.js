@@ -1,25 +1,44 @@
-// screens/HomeScreen.js (ฉบับอัปเดต: อ่านสถานะจาก Realtime Database)
+// screens/HomeScreen.js (ฉบับอัปเดต: แก้ปัญหา N/A และแสดงช่วงเวลาจองทั้ง Start-End)
 
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Alert } from 'react-native';
 import { SafeAreaView as SafeContextView } from 'react-native-safe-area-context';
-// <--- *** GEMINI FIX: 1. Import rtdb (Realtime DB) *** --->
 import { auth, db, rtdb } from '../firebaseConfig'; 
 import { collection, onSnapshot, doc, deleteDoc, query, where, orderBy } from 'firebase/firestore';
-// <--- *** GEMINI FIX: 2. Import คำสั่งของ Realtime DB *** --->
-import { ref, onValue } from 'firebase/database';
+import { ref, onValue, update } from 'firebase/database';
 import { Ionicons } from '@expo/vector-icons';
 
-// (BookingCard Component ไม่มีการเปลี่ยนแปลง)
+// --- Component: BookingCard ---
 const BookingCard = ({ spot, onCancel, navigation, userBooking }) => {
     
     // สถานะการจองปัจจุบันของ User
     const isReservedByCurrentUser = userBooking && userBooking.spotId === spot.spotName;
-    // สถานะการจอดรถจริง (อ่านจาก field ที่ ESP32 อัปเดต)
-    const isPhysicallyOccupied = spot.isOccupiedByCar === true; // ******* จุดสำคัญ: อ่านสถานะจริงจาก ESP32 *******
+    const isPhysicallyOccupied = spot.isOccupiedByCar === true; 
 
     // สถานะการจองปัจจุบันของช่องจอด (โดยใครก็ได้)
-    const isReservedNow = !!spot.currentBooking; 
+    const isReservedNow = spot.isReserved === true || !!spot.currentBooking; 
+    
+    // 🟢 NEW LOGIC: เลือก Booking Object ที่จะใช้แสดงผล
+    // Priority: 1. currentBooking (การจองที่กำลังใช้งานอยู่ตอนนี้) 
+    //           2. booking แรกใน allActiveBookings (การจองที่กำลังจะเริ่มหรือเพิ่งเริ่ม)
+    const bookingToDisplay = spot.currentBooking || (isReservedNow && spot.allActiveBookings.length > 0 
+        ? spot.allActiveBookings[0] 
+        : null);
+
+    // 🟢 Helper Function สำหรับการแปลง Timestamp
+    const timeFormatter = (timestamp) => timestamp 
+        ? timestamp.toDate().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' }) 
+        : 'N/A';
+    
+    // 🟢 ดึงเวลาเริ่มต้นและสิ้นสุดจาก bookingToDisplay (ถ้ามี)
+    const currentBookingStartTime = bookingToDisplay 
+        ? timeFormatter(bookingToDisplay.startTime) 
+        : 'N/A';
+        
+    const reservedUntilTime = bookingToDisplay
+        ? timeFormatter(bookingToDisplay.endTime) 
+        : 'N/A'; // ไม่จำเป็นต้องใช้ RTDB reservedUntil เป็น Fallback แล้ว ถ้าใช้ Logic นี้
+
 
     let status, color, detailComponent;
 
@@ -28,11 +47,10 @@ const BookingCard = ({ spot, onCancel, navigation, userBooking }) => {
         status = 'ไม่ว่าง';
         
         if (isReservedByCurrentUser) {
-            // กรณี 1: รถของผู้จองจอดอยู่จริง -> ใช้สีแดงเข้ม (#E53E3E) ตามคำขอ
-            color = '#E53E3E'; // สีแดงเข้ม
-            const bookingToShow = userBooking;
-            const startTime = bookingToShow.startTime.toDate().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
-            const endTime = bookingToShow.endTime.toDate().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+            // กรณี 1: รถของผู้จองจอดอยู่จริง -> สีแดงเข้ม (#E53E3E)
+            color = '#E53E3E'; 
+            const startTime = userBooking.startTime.toDate().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+            const endTime = userBooking.endTime.toDate().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
 
             detailComponent = (
                 <View>
@@ -43,17 +61,15 @@ const BookingCard = ({ spot, onCancel, navigation, userBooking }) => {
                 </View>
             );
         } else if (isReservedNow) {
-            // กรณี 2: มีคนอื่นจองและจอดอยู่ (แสดงสถานะไม่ว่างตามเดิม)
+            // กรณี 2: มีคนอื่นจองและจอดอยู่ 
             color = '#DD6B20'; // ส้ม
-            const bookingToShow = spot.currentBooking; 
-            const startTime = bookingToShow.startTime.toDate().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
-            const endTime = bookingToShow.endTime.toDate().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
             
             detailComponent = (
                 <View>
                     <Text style={styles.cardDetailLabel}>รายละเอียด:</Text>
+                    {/* แสดงช่วงเวลาของคนอื่นที่จอง (แบบมีรถจอด) */}
                     <Text style={[styles.cardDetailValue, { color: color, fontWeight: '700' }]}>
-                       มีรถจอดอยู่ (จองโดยผู้อื่น: {startTime} - {endTime} น.)
+                       มีรถจอดอยู่ (จองโดยผู้อื่น: {currentBookingStartTime} - {reservedUntilTime} น.)
                    </Text>
                 </View>
             );
@@ -63,12 +79,12 @@ const BookingCard = ({ spot, onCancel, navigation, userBooking }) => {
             detailComponent = (
                  <View>
                      <Text style={styles.cardDetailLabel}>รายละเอียด:</Text>
-                     <Text style={styles.cardDetailValue}>ไม่ว่าง (มีรถจอดอยู่โดยไม่มีการจอง)</Text>
+                     <Text style={styles.cardDetailValue}>ไม่ว่าง (มีรถจอด)</Text>
                  </View>
              );
         }
     } 
-    // VVV --- 2. ว่างจริงตามเซ็นเซอร์ (สีเขียว: ว่าง) --- VVV
+    // --- 2. ว่างจริงตามเซ็นเซอร์ (สีเขียว/ฟ้า: ว่าง หรือ จองแล้ว) ---
     else {
         // เมื่อไม่มีรถจอดจริง
         const now = new Date();
@@ -80,7 +96,7 @@ const BookingCard = ({ spot, onCancel, navigation, userBooking }) => {
         color = '#38A169'; // เขียว
 
         if (isReservedByCurrentUser) {
-             // กรณีพิเศษ: ผู้ใช้จองไว้ แต่ IR บอกว่า "ว่าง" -> อาจกำลังขับเข้ามา
+             // กรณีพิเศษ: ผู้ใช้จองไว้ แต่ยังไม่จอด
              color = '#3182ce'; // น้ำเงิน/ฟ้า (แสดงว่าจองแล้ว แต่ยังไม่จอด)
              status = 'จองแล้ว';
 
@@ -97,6 +113,21 @@ const BookingCard = ({ spot, onCancel, navigation, userBooking }) => {
                 </View>
             );
 
+        } else if (isReservedNow) {
+            // 🟢 กรณีที่มีการจองจากเครื่องอื่น (isReservedNow เป็นจริง) แต่ช่องจอดว่าง
+            color = '#DD6B20'; // ส้ม
+            status = 'จองแล้ว';
+            
+            detailComponent = (
+                <View>
+                    <Text style={styles.cardDetailLabel}>รายละเอียด:</Text>
+                    {/* 🟢 แสดงช่วงเวลาจองของคนอื่นที่ช่องว่าง */}
+                    <Text style={[styles.cardDetailValue, { color: color, fontWeight: '700' }]}>
+                        จองแล้ว: {currentBookingStartTime} - {reservedUntilTime} น.
+                    </Text>
+                </View>
+            );
+
         } else if (futureBookingsToday.length > 0) {
             // มีคนอื่นจองในอนาคต แต่ตอนนี้ว่างจริง
             const bookingSummary = futureBookingsToday.map(booking => {
@@ -107,7 +138,7 @@ const BookingCard = ({ spot, onCancel, navigation, userBooking }) => {
             
             detailComponent = (
                 <View>
-                    <Text style={styles.cardDetailLabel}>จองแล้วในวันนี้:</Text>
+                    <Text style={styles.cardDetailLabel}>จองแล้วในวันนี้ (ช่วงเวลาถัดไป):</Text>
                     <Text style={styles.cardDetailValue}>
                         {bookingSummary}
                     </Text>
@@ -138,8 +169,8 @@ const BookingCard = ({ spot, onCancel, navigation, userBooking }) => {
                 {detailComponent}
             </View>
             <View style={styles.buttonRow}>
-                {/* ปุ่มจองจะแสดงเมื่อว่างจริง (isPhysicallyOccupied: false) และผู้ใช้ไม่มีการจองอื่น */}
-                {!isPhysicallyOccupied && status === 'ว่าง' && !userBooking && (
+                {/* ปุ่มจองจะแสดงเมื่อว่างจริง, ผู้ใช้ไม่มีการจองอื่น, และช่องจอดนั้นยังไม่ถูกจองโดยใคร */}
+                {!isPhysicallyOccupied && status === 'ว่าง' && !userBooking && !isReservedNow && (
                     <TouchableOpacity style={[styles.actionButton, styles.reserveButton]} onPress={() => navigation.navigate('Booking', { spotId: spot.spotName })}>
                         <Text style={styles.actionButtonText}>กดจอง</Text>
                     </TouchableOpacity>
@@ -164,21 +195,20 @@ export default function HomeScreen({ navigation }) {
     useEffect(() => {
         const now = new Date();
         
-        // <--- *** GEMINI FIX: 3. เปลี่ยนจากการ "อ่าน" Firestore... *** --->
-        // 1. Listen to parking spots data (where ESP32 updates physical status)
+        // 1. Listen to parking spots data (Realtime DB)
         const spotsRef = ref(rtdb, 'parkingSpots/');
         const spotsUnsubscribe = onValue(spotsRef, (spotsSnapshot) => {
             const spotsData = spotsSnapshot.val();
-            // แปลง Object { S1: {...}, S2: {...} } ให้เป็น Array
             const allSpots = spotsData ? Object.keys(spotsData).map(key => ({
                 id: key,
-                spotName: key, // S1, S2, S3
-                isOccupiedByCar: spotsData[key].isOccupiedByCar
+                spotName: key,
+                isOccupiedByCar: spotsData[key].isOccupiedByCar,
+                // ดึงสถานะ isReserved และ reservedUntil จาก RTDB
+                isReserved: spotsData[key].isReserved || false, 
+                reservedUntil: spotsData[key].reservedUntil || null,
             })) : [];
-            // <--- *** สิ้นสุดการแก้ไข *** --->
 
-            // 2. Query active bookings (ยังคงใช้ Firestore "db" เหมือนเดิม)
-            // (เราย้าย allBookings ออกมาเพื่อให้ listener ไม่ซ้อนกัน)
+            // 2. Query active bookings (Firestore)
             const bookingsQuery = query(
                 collection(db, 'bookings'), 
                 where('endTime', '>=', now),
@@ -188,9 +218,9 @@ export default function HomeScreen({ navigation }) {
             // 3. Listen to active bookings
             const bookingsUnsubscribe = onSnapshot(bookingsQuery, (bookingsSnapshot) => {
                 const activeBookings = bookingsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                setAllBookings(activeBookings); // <--- เก็บ allBookings ไว้ใน state
+                setAllBookings(activeBookings);
                 
-                // 4. Combine data (ส่วนนี้ทำงานเหมือนเดิมเป๊ะ)
+                // 4. Combine data 
                 const combinedData = allSpots.map(spot => {
                     const bookingsForSpot = activeBookings.filter(b => b.spotId === spot.spotName);
                     
@@ -212,7 +242,7 @@ export default function HomeScreen({ navigation }) {
             return () => bookingsUnsubscribe();
         });
 
-        // 5. Listen to current user's active booking (ส่วนนี้ใช้ Firestore เหมือนเดิม)
+        // 5. Listen to current user's active booking 
         let userUnsubscribe = () => {};
         if (auth.currentUser) {
             const userQuery = query(collection(db, 'bookings'), where('userId', '==', auth.currentUser.uid), where('endTime', '>=', now));
@@ -225,9 +255,9 @@ export default function HomeScreen({ navigation }) {
             spotsUnsubscribe();
             userUnsubscribe();
         };
-    }, [loading]); // <--- เพิ่ม loading เข้าไปใน dependency array
+    }, [loading]);
 
-    // (ฟังก์ชัน handleCancel ไม่มีการเปลี่ยนแปลง)
+    // handleCancel function (พร้อมรีเซ็ต RTDB)
     const handleCancel = (bookingId, spotName) => {
         Alert.alert("ยืนยันการยกเลิก", `คุณต้องการยกเลิกการจองช่องจอด ${spotName} หรือไม่?`,
             [{ text: "ไม่", style: "cancel" },
@@ -235,7 +265,16 @@ export default function HomeScreen({ navigation }) {
                 text: "ยืนยัน", style: "destructive",
                 onPress: async () => {
                     try {
+                        // 1. ลบการจองออกจาก Firestore
                         await deleteDoc(doc(db, 'bookings', bookingId));
+                        
+                        // 2. รีเซ็ตสถานะการจองใน Realtime Database
+                        await update(ref(rtdb, `parkingSpots/${spotName}`), {
+                            isReserved: false,
+                            reservedBy: null,
+                            reservedUntil: null,
+                        });
+                        
                         Alert.alert("สำเร็จ", "การจองถูกยกเลิกแล้ว");
                     } catch (error) { Alert.alert("เกิดข้อผิดพลาด", "ยกเลิกไม่สำเร็จ: " + error.message); }
                 }
@@ -270,7 +309,7 @@ export default function HomeScreen({ navigation }) {
     );
 }
 
-// (Styles ไม่มีการเปลี่ยนแปลง)
+// (Styles)
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: '#f0f4f8' },
     header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#e2e8f0', minHeight: 60 },
